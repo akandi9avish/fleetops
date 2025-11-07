@@ -12,7 +12,7 @@ return new class extends Migration {
     {
         Schema::create('order_configs', function (Blueprint $table) {
             $table->increments('id');
-            $table->uuid('uuid')->nullable()->index();
+            $table->uuid('uuid')->nullable()->unique();
             $table->foreignUuid('company_uuid')->nullable()->references('uuid')->on('companies')->onUpdate('CASCADE')->onDelete('CASCADE');
             $table->foreignUuid('author_uuid')->nullable()->references('uuid')->on('users')->onUpdate('CASCADE')->onDelete('CASCADE');
             $table->foreignUuid('category_uuid')->nullable()->references('uuid')->on('categories')->onUpdate('CASCADE')->onDelete('CASCADE');
