@@ -12,7 +12,7 @@ return new class extends Migration {
     {
         Schema::create('work_orders', function (Blueprint $table) {
             $table->increments('id');
-            $table->uuid('uuid')->index();
+            $table->uuid('uuid')->unique();
             $table->string('_key')->nullable()->index();
             $table->foreignUuid('company_uuid')->constrained('companies', 'uuid')->cascadeOnDelete();
             $table->foreignUuid('category_uuid')->nullable()->constrained('categories', 'uuid')->nullOnDelete();
