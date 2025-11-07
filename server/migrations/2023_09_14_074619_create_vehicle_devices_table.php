@@ -9,7 +9,7 @@ return new class extends Migration {
     {
         Schema::create('vehicle_devices', function (Blueprint $table) {
             $table->increments('id');
-            $table->uuid('uuid')->nullable();
+            $table->uuid('uuid')->nullable()->unique();
             $table->uuid('vehicle_uuid');
             $table->foreign('vehicle_uuid')->references('uuid')->on('vehicles');
             $table->string('device_id')->nullable();
