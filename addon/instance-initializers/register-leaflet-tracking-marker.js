@@ -13,5 +13,6 @@ export function initialize(owner) {
 }
 
 export default {
+    name: 'register-leaflet-tracking-marker',
     initialize,
 };
