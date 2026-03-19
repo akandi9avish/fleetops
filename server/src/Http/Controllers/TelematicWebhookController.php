@@ -2,6 +2,9 @@
 
 namespace Fleetbase\FleetOps\Http\Controllers;
 
+use Fleetbase\FleetOps\Models\Device;
+use Fleetbase\FleetOps\Models\DeviceEvent;
+use Fleetbase\FleetOps\Models\Sensor;
 use Fleetbase\FleetOps\Models\Telematic;
 use Fleetbase\FleetOps\Support\Telematics\TelematicProviderRegistry;
 use Fleetbase\FleetOps\Support\Telematics\TelematicService;
@@ -89,13 +92,71 @@ class TelematicWebhookController extends Controller
         try {
             $result = $provider->processWebhook($request->all(), $request->headers->all());
 
+            $linkedDevicesByExternalId = [];
+
             // Link devices
-            foreach ($result['devices'] as $deviceData) {
-                $this->service->linkDevice($telematic, $deviceData);
+            foreach (($result['devices'] ?? []) as $deviceData) {
+                $device = $this->service->linkDevice($telematic, $deviceData);
+                $deviceExternalId = data_get($deviceData, 'external_id', data_get($deviceData, 'device_id'));
+                if ($deviceExternalId) {
+                    $linkedDevicesByExternalId[(string) $deviceExternalId] = $device;
+                }
             }
 
-            // Store events (TODO: implement event storage)
-            // Store sensors (TODO: implement sensor storage)
+            // Store normalized events
+            foreach (($result['events'] ?? []) as $eventData) {
+                $eventDevice = $this->resolveLinkedDevice($telematic, $linkedDevicesByExternalId, $eventData);
+
+                DeviceEvent::create([
+                    'company_uuid' => $telematic->company_uuid,
+                    'device_uuid'  => $eventDevice?->uuid,
+                    'payload'      => data_get($eventData, 'payload', $eventData),
+                    'meta'         => [
+                        'telematic_uuid' => $telematic->uuid,
+                        'provider'       => $telematic->provider,
+                        'raw'            => $eventData,
+                    ],
+                    'event_type' => data_get($eventData, 'event_type', 'telematic_event'),
+                    'severity'   => data_get($eventData, 'severity', 'info'),
+                    'ident'      => data_get($eventData, 'external_id'),
+                    'provider'   => $telematic->provider,
+                    'state'      => data_get($eventData, 'state'),
+                    'code'       => data_get($eventData, 'code'),
+                    'reason'     => data_get($eventData, 'reason'),
+                    'comment'    => data_get($eventData, 'message'),
+                ]);
+            }
+
+            // Store latest normalized sensor readings
+            foreach (($result['sensors'] ?? []) as $index => $sensorData) {
+                $sensorDevice = $this->resolveLinkedDevice($telematic, $linkedDevicesByExternalId, $sensorData);
+                $sensorInternalId = (string) (
+                    data_get($sensorData, 'external_id')
+                    ?? data_get($sensorData, 'sensor_id')
+                    ?? data_get($sensorData, 'name')
+                    ?? data_get($sensorData, 'sensor_type', 'sensor') . '-' . $index
+                );
+
+                $sensor = Sensor::firstOrNew([
+                    'telematic_uuid' => $telematic->uuid,
+                    'internal_id'    => $sensorInternalId,
+                ]);
+
+                $sensor->company_uuid    = $telematic->company_uuid;
+                $sensor->device_uuid     = $sensorDevice?->uuid;
+                $sensor->name            = data_get($sensorData, 'name', data_get($sensorData, 'sensor_type', 'Sensor'));
+                $sensor->type            = data_get($sensorData, 'sensor_type', 'generic');
+                $sensor->unit            = data_get($sensorData, 'unit');
+                $sensor->last_value      = (string) data_get($sensorData, 'value', '');
+                $sensor->last_reading_at = data_get($sensorData, 'recorded_at', now()->toDateTimeString());
+                $sensor->status          = data_get($sensorData, 'status', 'active');
+                $sensor->meta            = array_merge($sensor->meta ?? [], [
+                    'telematic_uuid' => $telematic->uuid,
+                    'provider'       => $telematic->provider,
+                    'raw'            => $sensorData,
+                ]);
+                $sensor->save();
+            }
 
             // Mark as processed
             if ($idempotencyKey) {
@@ -104,8 +165,9 @@ class TelematicWebhookController extends Controller
 
             Log::info('Webhook processed successfully', [
                 'correlation_id' => $correlationId,
-                'devices_count'  => count($result['devices']),
-                'events_count'   => count($result['events']),
+                'devices_count'  => count($result['devices'] ?? []),
+                'events_count'   => count($result['events'] ?? []),
+                'sensors_count'  => count($result['sensors'] ?? []),
             ]);
 
             return response()->json(['status' => 'processed'], 200);
@@ -165,5 +227,30 @@ class TelematicWebhookController extends Controller
 
             return response()->json(['error' => 'Ingest failed'], 500);
         }
+    }
+
+    /**
+     * Resolve a linked device for normalized event/sensor payloads.
+     *
+     * @param  array<string, Device>  $linkedDevicesByExternalId
+     */
+    protected function resolveLinkedDevice(Telematic $telematic, array $linkedDevicesByExternalId, ?array $payload = null): ?Device
+    {
+        $externalId = (string) (
+            data_get($payload, 'device_external_id')
+            ?? data_get($payload, 'device_id')
+            ?? data_get($payload, 'external_id')
+            ?? ''
+        );
+
+        if ($externalId !== '' && isset($linkedDevicesByExternalId[$externalId])) {
+            return $linkedDevicesByExternalId[$externalId];
+        }
+
+        if (count($linkedDevicesByExternalId) === 1) {
+            return array_values($linkedDevicesByExternalId)[0];
+        }
+
+        return Device::where('telematic_uuid', $telematic->uuid)->latest('updated_at')->first();
     }
 }

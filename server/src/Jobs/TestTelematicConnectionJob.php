@@ -2,7 +2,9 @@
 
 namespace Fleetbase\FleetOps\Jobs;
 
+use Fleetbase\FleetOps\Events\TelematicStatusUpdated;
 use Fleetbase\FleetOps\Models\Telematic;
+use Fleetbase\FleetOps\Support\Telematics\TelematicProviderRegistry;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -40,7 +42,7 @@ class TestTelematicConnectionJob implements ShouldQueue
     /**
      * Execute the job.
      */
-    public function handle(ProviderRegistry $registry): void
+    public function handle(TelematicProviderRegistry $registry): void
     {
         $correlationId = Str::uuid()->toString();
 
@@ -78,7 +80,16 @@ class TestTelematicConnectionJob implements ShouldQueue
                 'success'        => $result['success'],
             ]);
 
-            // Broadcast result (TODO: implement WebSocket broadcasting)
+            event(new TelematicStatusUpdated(
+                $this->telematic->uuid,
+                $this->telematic->provider,
+                'connection_test',
+                [
+                    'correlation_id' => $correlationId,
+                    'success'        => (bool) $result['success'],
+                    'message'        => $result['message'] ?? null,
+                ]
+            ));
         } catch (\Exception $e) {
             Log::error('Connection test failed', [
                 'correlation_id' => $correlationId,
@@ -87,6 +98,17 @@ class TestTelematicConnectionJob implements ShouldQueue
 
             $this->telematic->status = 'error';
             $this->telematic->save();
+
+            event(new TelematicStatusUpdated(
+                $this->telematic->uuid,
+                $this->telematic->provider,
+                'connection_test_failed',
+                [
+                    'correlation_id' => $correlationId,
+                    'success'        => false,
+                    'message'        => $e->getMessage(),
+                ]
+            ));
 
             throw $e;
         }

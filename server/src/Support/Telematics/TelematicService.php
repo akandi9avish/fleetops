@@ -2,10 +2,11 @@
 
 namespace Fleetbase\FleetOps\Support\Telematics;
 
-use Fleetbase\FleetOps\Jobs\SyncDevicesJob;
-use Fleetbase\FleetOps\Jobs\TestConnectionJob;
+use Fleetbase\FleetOps\Jobs\SyncTelematicDevicesJob;
+use Fleetbase\FleetOps\Jobs\TestTelematicConnectionJob;
 use Fleetbase\FleetOps\Models\Device;
 use Fleetbase\FleetOps\Models\Telematic;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
@@ -110,7 +111,7 @@ class TelematicService
     public function testConnection(Telematic $telematic, bool $async = false)
     {
         if ($async) {
-            $job = new TestConnectionJob($telematic);
+            $job = new TestTelematicConnectionJob($telematic);
             dispatch($job);
 
             return ['job_id' => $job->getJobId(), 'message' => 'Connection test queued'];
@@ -131,7 +132,7 @@ class TelematicService
      */
     public function discoverDevices(Telematic $telematic, array $options = []): string
     {
-        $job = new SyncDevicesJob($telematic, $options);
+        $job = new SyncTelematicDevicesJob($telematic, $options);
         dispatch($job);
 
         return $job->getJobId();
@@ -142,16 +143,26 @@ class TelematicService
      */
     public function linkDevice(Telematic $telematic, array $deviceData): Device
     {
+        $externalId = data_get($deviceData, 'external_id', data_get($deviceData, 'device_id'));
+        if (!$externalId) {
+            $externalId = (string) Str::uuid();
+        }
+
         $device = Device::firstOrNew([
             'telematic_uuid' => $telematic->uuid,
-            'external_id'    => $deviceData['external_id'],
+            'device_id'      => $externalId,
         ]);
 
-        $device->device_name     = $deviceData['device_name'] ?? 'Unknown Device';
-        $device->device_model    = $deviceData['device_model'] ?? null;
-        $device->device_provider = $telematic->provider;
-        $device->status          = $deviceData['status'] ?? 'active';
-        $device->meta            = array_merge($device->meta ?? [], $deviceData['meta'] ?? []);
+        $device->company_uuid = $telematic->company_uuid;
+        $device->name         = data_get($deviceData, 'name', data_get($deviceData, 'device_name', 'Unknown Device'));
+        $device->model        = data_get($deviceData, 'model', data_get($deviceData, 'device_model'));
+        $device->provider     = data_get($deviceData, 'provider', data_get($deviceData, 'device_provider', $telematic->provider));
+        $device->status       = data_get($deviceData, 'status', 'active');
+        $device->imei         = data_get($deviceData, 'imei');
+        $device->imsi         = data_get($deviceData, 'imsi');
+        $device->internal_id  = data_get($deviceData, 'internal_id');
+        $device->meta         = array_merge($device->meta ?? [], $deviceData['meta'] ?? []);
+        $device->data         = array_merge($device->data ?? [], $deviceData);
 
         $device->save();
 
@@ -173,8 +184,9 @@ class TelematicService
 
         if (isset($filters['search'])) {
             $query->where(function ($q) use ($filters) {
-                $q->where('device_name', 'like', "%{$filters['search']}%")
-                  ->orWhere('external_id', 'like', "%{$filters['search']}%");
+                $q->where('name', 'like', "%{$filters['search']}%")
+                    ->orWhere('device_id', 'like', "%{$filters['search']}%")
+                    ->orWhere('internal_id', 'like', "%{$filters['search']}%");
             });
         }
 
